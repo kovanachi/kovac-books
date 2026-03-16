@@ -34,6 +34,7 @@ input, select, textarea, button { font-family: var(--sans); }
 .app { max-width: 720px; margin: 0 auto; padding: 0 16px 120px; }
 .header { display: flex; justify-content: space-between; align-items: center; padding: 20px 0 14px; border-bottom: 1px solid var(--border); }
 .header-left { display: flex; align-items: center; gap: 10px; }
+.header-right { display: flex; align-items: center; gap: 4px; }
 .logo { font-size: 26px; color: var(--green); }
 .title { font-family: var(--mono); font-size: 16px; font-weight: 700; letter-spacing: 2px; color: #f0f0f5; }
 .subtitle { font-size: 11px; color: var(--text4); letter-spacing: 1px; margin-top: 1px; }
@@ -96,6 +97,8 @@ input, select, textarea, button { font-family: var(--sans); }
 .empty-icon { font-size: 38px; margin-bottom: 10px; }
 .empty-text { font-size: 13px; color: var(--text5); }
 .history-count { font-size: 12px; color: var(--text4); font-family: var(--mono); }
+.export-btn { background: var(--green); color: #000; border: none; border-radius: 8px; padding: 10px 20px; font-size: 13px; font-weight: 600; cursor: pointer; letter-spacing: .5px; margin-bottom: 16px; display: inline-block; }
+.export-btn:active { transform: scale(.97); opacity: .9; }
 
 .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.78); display: flex; justify-content: center; align-items: flex-end; z-index: 1000; animation: overlayIn .2s ease; }
 .modal { background: var(--bg2); border: 1px solid var(--border3); border-radius: 18px 18px 0 0; padding: 22px 20px 34px; width: 100%; max-width: 500px; max-height: 88vh; overflow-y: auto; animation: modalIn .3s ease; -webkit-overflow-scrolling: touch; }
@@ -174,7 +177,7 @@ const EC=[
   {id:"charity",label:"Charity",icon:"🤲"},{id:"misc",label:"Miscellaneous",icon:"📦"},
 ];
 const PM=[{id:"kast",label:"Kast",icon:"💳"},{id:"redotpay",label:"RedotPay",icon:"🔴"},{id:"naya_sada",label:"Naya/SadaPay",icon:"📲"},{id:"bank",label:"Bank",icon:"🏦"}];
-const CUR=["PKR","USD","USDT"], RATE=280, SK="kovac-books-v2";
+const CUR=["PKR","USD","USDT"], RATE=280, SK="kovac-books-v2", SK_URL="kovac-books-sync-url";
 
 const fmtC=(a,c)=>c==='PKR'?`Rs ${Math.round(a).toLocaleString('en-PK')}`:c==='USD'?`$${a.toFixed(2)}`:`${a.toFixed(2)} USDT`;
 const toP=(a,c)=>c==='PKR'?a:a*RATE;
@@ -188,6 +191,19 @@ const fIC=id=>IC.find(c=>c.id===id);
 const fEC=id=>EC.find(c=>c.id===id);
 const fPM=id=>PM.find(p=>p.id===id);
 const fBT=id=>BT.find(b=>b.id===id);
+
+let syncURL='';
+try{syncURL=localStorage.getItem(SK_URL)||'';}catch{}
+
+function saveSyncURL(url){syncURL=url.trim();try{localStorage.setItem(SK_URL,syncURL);}catch{}}
+
+async function syncToSheet(type,entry){
+  if(!syncURL)return;
+  const payload={type:type,id:entry.id,date:entry.date,category:(type==='income'?(fIC(entry.category)||{}).label:( fEC(entry.category)||{}).label)||entry.category,amount:entry.amount,currency:entry.currency,amountPKR:Math.round(toP(entry.amount,entry.currency)),note:entry.note||''};
+  if(type==='income'){payload.brandDealType=entry.brandDealType?(fBT(entry.brandDealType)||{}).label||entry.brandDealType:'';payload.agencyName=entry.agencyName||'';}
+  if(type==='expense'){payload.paymentMethod=entry.paymentMethod?(fPM(entry.paymentMethod)||{}).label||entry.paymentMethod:'';}
+  try{await fetch(syncURL,{method:'POST',mode:'no-cors',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});toast('Synced to Sheet ✓');}catch(err){console.error('Sync error:',err);toast('Sync failed — check settings');}
+}
 
 let S={income:[],expenses:[],budgetTarget:50000};
 let tab='dashboard', fMonth=curMK(), ePF='all', tTimer=null;
@@ -232,7 +248,10 @@ function render(){
 
   const header=h('header','header',{c:[
     h('div','header-left',{c:[h('span','logo',{t:'⬡'}),h('div','',{c:[h('h1','title',{t:'KOVAC BOOKS'}),h('p','subtitle',{t:'Financial Command Center'})]})]}),
-    sel
+    h('div','header-right',{c:[
+      sel,
+      h('button','settings-btn',{t:'⚙️',s:{background:'none',border:'none',fontSize:'20px',cursor:'pointer',padding:'6px',marginLeft:'8px',filter:syncURL?'none':'grayscale(1) opacity(0.4)'},on:{click:openSettings}})
+    ]})
   ]});
   app.appendChild(header);
 
@@ -381,9 +400,18 @@ function expRow(e,i){
 }
 
 // ═══════ HISTORY ═══════
+function exportCSV(){
+  let csv="Type,Category,SubType,Agency,Amount,Currency,AmountPKR,PaymentMethod,Date,Note\n";
+  S.income.forEach(r=>{csv+=`Income,${r.category},${r.brandDealType||''},${r.agencyName||''},${r.amount},${r.currency},${Math.round(toP(r.amount,r.currency))},,${r.date},"${(r.note||'').replace(/"/g,'""')}"\n`});
+  S.expenses.forEach(r=>{csv+=`Expense,${r.category},,,${r.amount},${r.currency},${Math.round(toP(r.amount,r.currency))},${r.paymentMethod||''},${r.date},"${(r.note||'').replace(/"/g,'""')}"\n`});
+  const blob=new Blob([csv],{type:'text/csv'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='kovac-books-'+new Date().toISOString().slice(0,10)+'.csv';a.click();URL.revokeObjectURL(url);
+}
+
 function renderHist(p){
   const all=[...S.income.map(e=>({...e,_t:'i'})),...S.expenses.map(e=>({...e,_t:'e'}))].sort((a,b)=>new Date(b.date)-new Date(a.date));
   p.appendChild(h('div','section-header',{c:[h('h2','section-title',{t:'All Transactions'}),h('span','history-count',{t:`${all.length} entries`})]}));
+  const exportBtn=h('button','export-btn',{t:'📥 Export CSV',on:{click:exportCSV}});
+  p.appendChild(exportBtn);
   if(!all.length){p.appendChild(emptyEl('📋','No transactions yet'));return;}
   all.forEach((e,i)=>p.appendChild(e._t==='i'?incRow(e,i):expRow(e,i)));
 }
@@ -460,7 +488,7 @@ function openIncForm(){
       const a=parseFloat(amt);if(!a||a<=0)return;
       const entry={id:uid(),category:cat,amount:a,currency:cur,date:dt,note:note.trim()};
       if(cat==='brand_deal'){entry.brandDealType=bType;entry.agencyName=agency.trim();}
-      S.income.unshift(entry);save();closeModal();toast('Income added!');render();
+      S.income.unshift(entry);save();closeModal();toast('Income added!');syncToSheet('income',entry);render();
     }}}));
   }
 
@@ -512,8 +540,9 @@ function openExpForm(){
 
     w.appendChild(h('button','submit-btn',{t:'Log Expense',on:{click:()=>{
       const a=parseFloat(amt);if(!a||a<=0)return;
-      S.expenses.unshift({id:uid(),category:cat,amount:a,currency:cur,date:dt,note:note.trim(),paymentMethod:pay});
-      save();closeModal();toast('Expense logged!');render();
+      const entry={id:uid(),category:cat,amount:a,currency:cur,date:dt,note:note.trim(),paymentMethod:pay};
+      S.expenses.unshift(entry);
+      save();closeModal();toast('Expense logged!');syncToSheet('expense',entry);render();
     }}}));
   }
 
@@ -532,6 +561,28 @@ function openBudget(){
   inp.value=tgt;w.appendChild(inp);
   w.appendChild(h('button','submit-btn',{t:'Save Budget',on:{click:()=>{S.budgetTarget=tgt;save();closeModal();toast('Budget updated!');render();}}}));
   openModal('Set Monthly Budget',w);
+}
+
+// ─── SETTINGS MODAL ───
+function openSettings(){
+  let url=syncURL;
+  const w=h('div');
+
+  const statusDot=h('span','',{t:syncURL?'🟢 Connected':'🔴 Not connected',s:{fontSize:'13px',display:'block',marginBottom:'14px',color:syncURL?'var(--green)':'var(--red)'}});
+  w.appendChild(statusDot);
+
+  w.appendChild(h('label','form-label',{t:'Google Sheets Sync URL'}));
+  w.appendChild(h('p','',{t:'Paste your Google Apps Script Web App URL here. Every entry you add will auto-sync to your Google Sheet.',s:{fontSize:'12px',color:'var(--text4)',marginBottom:'10px'}}));
+  const inp=h('input','form-input',{placeholder:'https://script.google.com/macros/s/.../exec',on:{input:e=>url=e.target.value}});
+  inp.value=url;w.appendChild(inp);
+
+  w.appendChild(h('button','submit-btn',{t:'Save Settings',on:{click:()=>{saveSyncURL(url);closeModal();toast(url?'Sheets sync enabled ✓':'Sync disabled');render();}}}));
+
+  if(syncURL){
+    w.appendChild(h('button','',{t:'Disconnect Sync',s:{width:'100%',background:'none',border:'1px solid var(--red)',color:'var(--red)',borderRadius:'8px',padding:'12px',fontSize:'13px',cursor:'pointer',marginTop:'10px'},on:{click:()=>{saveSyncURL('');closeModal();toast('Sync disconnected');render();}}}));
+  }
+
+  openModal('Settings',w);
 }
 
 load();render();
